@@ -10,10 +10,10 @@ import numpy as np
 
 WORLD_WIDTH = 960
 WORLD_HEIGHT = 640
-WORLD_SCALE_FACTOR = 5
+WORLD_SCALE_FACTOR = 4
 
 MUTATION_RATE = 0.001  # вероятность мутации каждого веса
-MUTATION_SCALE = 0.1 # масштаб (стандартное отклонение) мутаций
+MUTATION_SCALE = 0.05 # масштаб (стандартное отклонение) мутаций
 
 class FPS:
     def __init__(self):
@@ -71,7 +71,9 @@ class Perceptron:
         
         output_layer_values = [sum(ho*hw for ho, hw in zip(hidden_layer_outputs, weight)) for weight in self.hidden_layer_weights]
         output_layer_outputs = self.softmax(output_layer_values)
-        
+
+        # print(output_layer_outputs)
+
         return output_layer_outputs
 
 
@@ -80,17 +82,23 @@ class Snake:
     DIRECTION_RIGHT = 1
     DIRECTION_DOWN = 2
     DIRECTION_LEFT = 3
-    VIEW_RADIUS = 32
-    MAX_ENERGY = 200
-    MAX_LENGTH = 6
+    VIEW_RADIUS = 16
+    MAX_ENERGY = 50
+    MAX_LENGTH = 4
 
-    def __init__(self, position, direction, body, energy=MAX_ENERGY):
+    def __init__(self, position, direction, body, color=None):
         self.position = position
         self.direction = direction
-        self.body = deque(body)  # Используйте deque вместо списка
-        self.body_set = set(body)  # Создайте хеш-сет для тела змейки
-        self.energy = energy
-        self.brain = Perceptron(6, 12, 3)  # Добавляем мозг в виде перцептрона
+        self.body = deque(body)
+        self.body_set = set(body)
+        self.energy = self.MAX_ENERGY
+        self.brain = Perceptron(8, 8, 3)
+        if color is None:
+            self.color = (random.uniform(0, 255), random.uniform(0, 255), random.uniform(0, 255))
+        else:
+            self.color = color
+        
+        # self.MAX_LENGTH = 4
 
     def step(self):
         self.energy -= 1  # змейка тратит энергию на движение
@@ -133,10 +141,10 @@ class Snake:
         else:
             return    
         
-        # for snake in field.snakes:
-        #     if snake != self and next_position in snake.body_set:
-        #         self.dead()
-        #         return
+        for snake in field.snakes:
+            if snake != self and next_position in snake.body_set:
+                self.dead()
+                return
         
         if next_position in self.body_set:
             # то удаляем из тела все элементы, начиная с этой позиции.
@@ -166,8 +174,7 @@ class Snake:
 
             if len(self.body) > 1:
                 self.body_set.remove(self.body.pop())
-
-        print(self.look_around(self.VIEW_RADIUS))
+        # print(self.look_around(self.VIEW_RADIUS))
 
     def get_direction(self, pos1, pos2):
         # Вычисляем направление от pos1 к pos2
@@ -194,12 +201,12 @@ class Snake:
     def look_around(self, view_radius):
         # Определение направлений взгляда
         directions = [(self.direction - 1) % 4, self.direction, (self.direction + 1) % 4]
-        closest_objects = [0, 0, 0]
-        closest_distances = [view_radius + 1, view_radius + 1, view_radius + 1]
+        closest_objects = [0, 0, 0, 0, 0]
+        closest_distances = [view_radius + 1, view_radius + 1, view_radius + 1, view_radius + 1, view_radius + 1]
 
         # Проверка каждой позиции в радиусе обзора
         for distance in range(1, view_radius + 1):
-            for direction in directions:
+            for i, direction in enumerate(directions):
                 if direction == self.DIRECTION_UP:
                     pos = (self.position[0], (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
                 elif direction == self.DIRECTION_RIGHT:
@@ -220,6 +227,76 @@ class Snake:
                     continue
 
                 # Обновление ближайших объектов и расстояний
+                if distance < closest_distances[i]:
+                    closest_objects[i] = object_type
+                    closest_distances[i] = round(1 - distance / view_radius, 2)
+
+        # Добавляем диагональные направления
+        for distance in range(1, view_radius + 1):
+            if self.direction == self.DIRECTION_UP:
+                pos_diag1 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                pos_diag2 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+            elif self.direction == self.DIRECTION_RIGHT:
+                pos_diag1 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                pos_diag2 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+            elif self.direction == self.DIRECTION_DOWN:
+                pos_diag1 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                pos_diag2 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+            elif self.direction == self.DIRECTION_LEFT:
+                pos_diag1 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                pos_diag2 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+            # Проверка столкновений со стенами, едой и другими змейками
+            positions = [pos_diag1, pos_diag2]
+            for i, pos in enumerate(positions):
+                if pos in field.wall_set:
+                    object_type = 1
+                elif pos in field.snake_set:
+                    object_type = 1
+                elif pos in field.food_set:
+                    object_type = 3
+                else:
+                    continue
+
+                # Обновление ближайших объектов и расстояний
+                if distance < closest_distances[i+3]:
+                    closest_objects[i+3] = object_type
+                    closest_distances[i+3] = round(1 - distance / view_radius, 2)
+
+        for k in range(5):
+            if closest_objects[k] == 0:
+                closest_distances[k] = 0
+
+        return closest_objects, closest_distances
+
+    # def look_around(self, view_radius):
+        # Определение направлений взгляда
+        directions = [(self.direction - 1) % 4, self.direction, (self.direction + 1) % 4]
+        closest_objects = [0, 0, 0]
+        closest_distances = [view_radius + 1, view_radius + 1, view_radius + 1]
+
+        # Проверка каждой позиции в радиусе обзора
+        for distance in range(1, view_radius + 1):
+            for direction in directions:
+                if direction == self.DIRECTION_UP:
+                    pos = (self.position[0], (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                elif direction == self.DIRECTION_RIGHT:
+                    pos = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, self.position[1])
+                elif direction == self.DIRECTION_DOWN:
+                    pos = (self.position[0], (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                elif direction == self.DIRECTION_LEFT:
+                    pos = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, self.position[1])
+
+                # Проверка столкновений со стенами, едой и другими змейками
+                if pos in field.wall_set:
+                    object_type = 3
+                elif pos in field.snake_set:
+                    object_type = 2
+                elif pos in field.food_set:
+                    object_type = 1
+                else:
+                    continue
+
+                # Обновление ближайших объектов и расстояний
                 for k in range(3):
                     if directions[k] == direction and distance < closest_distances[k]:
                         closest_objects[k] = object_type
@@ -230,6 +307,7 @@ class Snake:
                 closest_distances[k] = 0
 
         return closest_objects, closest_distances
+
 
     def reproduce(self):
         half_length = len(self.body) // 2
@@ -242,7 +320,7 @@ class Snake:
         new_body = body_list[half_length:]
         new_body.reverse()  # Разворачиваем список тела второй змейки
 
-        child = Snake(new_body[0], tail_direction, new_body)
+        child = Snake(new_body[0], tail_direction, new_body, self.color)
 
         # Удаляем половину тела у старой змейки
         self.body = deque(body_list[:half_length])
@@ -253,6 +331,9 @@ class Snake:
         # Мутация весов
         child.brain.mutate_weights()
 
+        child.MAX_LENGTH = self.MAX_LENGTH + 0.01
+
+        
         # Добавляем новую змейку на поле
         field.add_snake(child)
 
@@ -305,21 +386,36 @@ class Field:
             if position not in self.walls and position not in self.foods:
                 return Snake(position, random.choice([Snake.DIRECTION_UP, Snake.DIRECTION_RIGHT, Snake.DIRECTION_DOWN, Snake.DIRECTION_LEFT]), [position])
 
+import pygame
+
+def initialize_game():
+    global field
+    field = Field((WORLD_WIDTH, WORLD_HEIGHT))
+
+    for _ in range(1000):
+        field.add_food(field.random_food())
+
+    for _ in range(0):
+        field.add_wall(field.random_wall())
+
+    for _ in range(2000):
+        field.add_snake(field.random_snake())
+
+def spawn_old_snake(old_snakes):
+    new_snakes = []
+    for snake in old_snakes:
+        new_snake = field.random_snake()
+        new_snake.brain.set_weights(snake.brain.get_weights())
+        new_snake.MAX_LENGTH = snake.MAX_LENGTH
+        new_snakes.append(new_snake)
+    for new_snake in new_snakes:
+        field.add_snake(new_snake)
+
 pygame.init()
-
-
 screen = pygame.display.set_mode((WORLD_WIDTH, WORLD_HEIGHT))
-field = Field((WORLD_WIDTH, WORLD_HEIGHT))
 fps_counter = FPS()
 
-for _ in range(200):
-    field.add_food(field.random_food())
-
-for _ in range(500):
-    field.add_wall(field.random_wall())
-
-for _ in range(1):
-    field.add_snake(field.random_snake())
+initialize_game()
 
 while True:
     for event in pygame.event.get():
@@ -340,17 +436,20 @@ while True:
             elif event.key == pygame.K_SPACE:
                 for snake in field.snakes:
                     snake.step()
+            elif event.key == pygame.K_r:  # Нажатие клавиши 'r' перезапускает игру
+                initialize_game()
+
+    # if len(field.snakes) < 10:
+    #     spawn_old_snake(field.snakes)
 
     screen.fill((0, 0, 0))
 
-    # fps_counter.count()
-
-    # for snake in field.snakes:
-    #     snake.step()
+    for snake in field.snakes:
+        snake.step()
 
     for snake in field.snakes:
         for segment in snake.body:
-            pygame.draw.rect(screen, (255, 0, 0), pygame.Rect(segment[0], segment[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
+            pygame.draw.rect(screen, snake.color, pygame.Rect(segment[0], segment[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
 
     for food in field.foods:
         pygame.draw.rect(screen, (0, 255, 0), pygame.Rect(food[0], food[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
@@ -358,8 +457,8 @@ while True:
     for wall in field.walls:
         pygame.draw.rect(screen, (255, 255, 255), pygame.Rect(wall[0], wall[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
 
-    # Обновление экрана
     pygame.display.flip()
 
+
     # Задержка
-    # pygame.time.delay(50)
+    # pygame.time.delay(10)
