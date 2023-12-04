@@ -9,14 +9,14 @@ import pickle
 import datetime
 import os
 
-WORLD_WIDTH = 960
-WORLD_HEIGHT = 640
-WORLD_SCALE_FACTOR = 4
+WORLD_WIDTH = 1080
+WORLD_HEIGHT = 750
+WORLD_SCALE_FACTOR = 5
 
 max_generation = 0
 
 MUTATION_RATE = 0.001  # вероятность мутации каждого веса
-MUTATION_SCALE = 0.05 # масштаб (стандартное отклонение) мутаций
+MUTATION_SCALE = 0.01 # масштаб (стандартное отклонение) мутаций
 
 class FPS:
     def __init__(self):
@@ -287,7 +287,8 @@ class Snake:
         # мутация весов
         child.brain.mutate_weights()
 
-        child.MAX_LENGTH = self.MAX_LENGTH + 0.5
+        self.MAX_LENGTH += 1
+        child.MAX_LENGTH = self.MAX_LENGTH
 
         child.generation = self.generation + 1
         global max_generation
@@ -352,10 +353,10 @@ def initialize_game():
     global field
     field = Field((WORLD_WIDTH, WORLD_HEIGHT))
 
-    for _ in range(800):
+    for _ in range(500):
         field.add_food(field.random_food())
 
-    for _ in range(1000):
+    for _ in range(1200):
         field.add_wall(field.random_wall())
 
     for _ in range(2):
