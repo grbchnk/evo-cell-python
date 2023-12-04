@@ -1,16 +1,19 @@
 import pygame
-import math
 import sys
 import random
 import numpy as np
 import time
 from collections import deque
-
-import numpy as np
+import matplotlib.pyplot as plt
+import pickle
+import datetime
+import os
 
 WORLD_WIDTH = 960
 WORLD_HEIGHT = 640
 WORLD_SCALE_FACTOR = 4
+
+max_generation = 0
 
 MUTATION_RATE = 0.001  # вероятность мутации каждого веса
 MUTATION_SCALE = 0.05 # масштаб (стандартное отклонение) мутаций
@@ -46,6 +49,15 @@ class Perceptron:
         print("Input layer weights: ", self.input_layer_weights)
         print("Hidden layer weights: ", self.hidden_layer_weights)
 
+    def save_weights(self, filename):
+        with open(filename, 'wb') as f:
+            pickle.dump(self.get_weights(), f)
+
+    def load_weights(self, filename):
+        with open(filename, 'rb') as f:
+            weights = pickle.load(f)
+        self.set_weights(weights)
+
     def mutate_weights(self):
         for i in range(len(self.input_layer_weights)):
             for j in range(len(self.input_layer_weights[i])):
@@ -72,8 +84,6 @@ class Perceptron:
         output_layer_values = [sum(ho*hw for ho, hw in zip(hidden_layer_outputs, weight)) for weight in self.hidden_layer_weights]
         output_layer_outputs = self.softmax(output_layer_values)
 
-        # print(output_layer_outputs)
-
         return output_layer_outputs
 
 
@@ -83,7 +93,7 @@ class Snake:
     DIRECTION_DOWN = 2
     DIRECTION_LEFT = 3
     VIEW_RADIUS = 16
-    MAX_ENERGY = 50
+    MAX_ENERGY = 30
     MAX_LENGTH = 4
 
     def __init__(self, position, direction, body, color=None):
@@ -97,25 +107,22 @@ class Snake:
             self.color = (random.uniform(0, 255), random.uniform(0, 255), random.uniform(0, 255))
         else:
             self.color = color
+        self.generation = 0
 
     def step(self):
-        self.energy -= 1  # змейка тратит энергию на движение
+        self.energy -= 1 
         
         if self.energy <= 0:
             self.energy = self.MAX_ENERGY
-            self.body_set.remove(self.body.pop())  # если энергия заканчивается, змейка уменьшает свое тело на 1
+            self.body_set.remove(self.body.pop())
 
         if len(self.body) > 0:
             closest_objects, closest_distances = self.look_around(self.VIEW_RADIUS)
-
-            # Преобразование данных в подходящий формат
             input_data = closest_objects + closest_distances
 
-            # Получение предсказания от перцептрона
             prediction = self.brain.predict(input_data)
-            # Выбор действия с наибольшей вероятностью
+
             actions = ["FORWARD", "LEFT", "RIGHT"]
-            
             action = actions[np.argmax(prediction)]
 
             snake.move(action)
@@ -211,9 +218,9 @@ class Snake:
                     pos = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, self.position[1])
 
                 if pos in field.wall_set:
-                    object_type = 1
+                    object_type = -1
                 elif pos in field.snake_set:
-                    object_type = 1
+                    object_type = -1
                 elif pos in field.food_set:
                     object_type = 3
                 else:
@@ -240,9 +247,9 @@ class Snake:
             positions = [pos_diag1, pos_diag2]
             for i, pos in enumerate(positions):
                 if pos in field.wall_set:
-                    object_type = 1
+                    object_type = -1
                 elif pos in field.snake_set:
-                    object_type = 1
+                    object_type = -1
                 elif pos in field.food_set:
                     object_type = 3
                 else:
@@ -261,30 +268,38 @@ class Snake:
     def reproduce(self):
         half_length = len(self.body) // 2
 
-        # Вычисляем направление хвоста старой змейки
+        # вычисляем направление хвоста старой змейки
         tail_direction = self.get_direction(self.body[-2], self.body[-1])
 
-        # Создаем новую змейку с половиной тела старой змейки
+        # создаем новую змейку с половиной тела старой змейки
         body_list = list(self.body)
         new_body = body_list[half_length:]
-        new_body.reverse()  # Разворачиваем список тела второй змейки
+        new_body.reverse()  # разворачиваем список тела второй змейки
 
         child = Snake(new_body[0], tail_direction, new_body, self.color)
 
-        # Удаляем половину тела у старой змейки
+        # удаляем половину тела у старой змейки
         self.body = deque(body_list[:half_length])
         self.body_set = set(self.body)
 
         child.brain.set_weights(self.brain.get_weights())
 
-        # Мутация весов
+        # мутация весов
         child.brain.mutate_weights()
 
-        child.MAX_LENGTH = self.MAX_LENGTH + 0.01
+        child.MAX_LENGTH = self.MAX_LENGTH + 0.5
+
+        child.generation = self.generation + 1
+        global max_generation
+        if child.generation > max_generation:
+            max_generation = child.generation
+            self.brain.save_weights("gene_max-" + str(child.generation) + "_" + datetime.datetime.now().strftime("-%f") + ".pkl")
+            print(max_generation)
 
         field.add_snake(child)
 
     def eat(self):
+        # шото тут было но уже нету
         return
 
     def dead(self):
@@ -337,28 +352,55 @@ def initialize_game():
     global field
     field = Field((WORLD_WIDTH, WORLD_HEIGHT))
 
-    for _ in range(1000):
+    for _ in range(800):
         field.add_food(field.random_food())
 
-    for _ in range(0):
+    for _ in range(1000):
         field.add_wall(field.random_wall())
 
-    for _ in range(2000):
-        field.add_snake(field.random_snake())
+    for _ in range(2):
+                # field.add_snake(field.random_snake())
 
-def spawn_old_snake(old_snakes):
-    new_snakes = []
-    for snake in old_snakes:
-        new_snake = field.random_snake()
-        new_snake.brain.set_weights(snake.brain.get_weights())
-        new_snake.MAX_LENGTH = snake.MAX_LENGTH
-        new_snakes.append(new_snake)
-    for new_snake in new_snakes:
-        field.add_snake(new_snake)
+
+        # files = os.listdir('.')
+
+        # # Фильтруем список, чтобы оставить только файлы .pkl
+        # files = [file for file in files if file.endswith('.pkl')]
+
+        # # Сортируем файлы по времени изменения (самый последний будет первым)
+        # files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+
+        # # Берем первый файл из списка
+        # last_file = files[0]
+
+        # gen_snake = field.random_snake()
+        # gen_snake.brain.load_weights(last_file)
+        # field.add_snake(gen_snake)
+
+        files = os.listdir('.')
+
+        # Фильтруем список, чтобы оставить только файлы .pkl
+        files = [file for file in files if file.endswith('.pkl')]
+
+        # Сортируем файлы по времени изменения (самый последний будет первым)
+        files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+
+        for file in files[20:]:
+            os.remove(file)
+
+        for i in range(20):
+            last_file = files[i]
+            gen_snake = field.random_snake()
+            gen_snake.brain.load_weights(last_file)
+            field.add_snake(gen_snake)
 
 pygame.init()
 screen = pygame.display.set_mode((WORLD_WIDTH, WORLD_HEIGHT))
 fps_counter = FPS()
+
+snake_counts_by_color = {}
+step_counter = 10
+plt.ion()
 
 initialize_game()
 
@@ -384,8 +426,10 @@ while True:
             elif event.key == pygame.K_r:
                 initialize_game()
 
-    # if len(field.snakes) < 10:
-    #     spawn_old_snake(field.snakes)
+    if len(field.snakes) <= 10:
+        for snake in field.snakes:
+            snake.brain.save_weights("gene_" + datetime.datetime.now().strftime("-%f") + ".pkl")
+        initialize_game()
 
     screen.fill((0, 0, 0))
 
@@ -397,13 +441,31 @@ while True:
             pygame.draw.rect(screen, snake.color, pygame.Rect(segment[0], segment[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
 
     for food in field.foods:
-        pygame.draw.rect(screen, (0, 255, 0), pygame.Rect(food[0], food[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
+        pygame.draw.circle(screen, (0, 255, 0), (food[0]+WORLD_SCALE_FACTOR/2, food[1]+WORLD_SCALE_FACTOR/2), WORLD_SCALE_FACTOR/1.2)
+        pygame.draw.circle(screen, (255, 255, 255), (food[0]+WORLD_SCALE_FACTOR/2, food[1]+WORLD_SCALE_FACTOR/2), WORLD_SCALE_FACTOR/2)
 
     for wall in field.walls:
-        pygame.draw.rect(screen, (255, 255, 255), pygame.Rect(wall[0], wall[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
+        pygame.draw.rect(screen, (255, 0, 255), pygame.Rect(wall[0], wall[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
+
+
+
+    snake_counts_by_color = {}
+
+    for snake in field.snakes:
+        if snake.color not in snake_counts_by_color:
+            snake_counts_by_color[snake.color] = 1
+        else:
+            snake_counts_by_color[snake.color] += 1
+
+    total_snakes = sum(snake_counts_by_color.values())
+    scaling_factor = WORLD_WIDTH / total_snakes
+
+    x = 0
+    for color, count in snake_counts_by_color.items():
+        width = count * scaling_factor
+        pygame.draw.rect(screen, color, pygame.Rect(x, WORLD_HEIGHT - 20, width, WORLD_HEIGHT))
+        x += width
+
+
 
     pygame.display.flip()
-
-
-    # Задержка
-    # pygame.time.delay(10)
