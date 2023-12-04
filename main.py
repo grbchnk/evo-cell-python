@@ -1,5 +1,5 @@
 import pygame
-import pygame_gui
+import math
 import sys
 import random
 import numpy as np
@@ -8,13 +8,12 @@ from collections import deque
 
 import numpy as np
 
-import tensorflow as tf
-from keras.layers import Input, Dense
-from keras.models import Model
-
 WORLD_WIDTH = 960
 WORLD_HEIGHT = 640
-WORLD_SCALE_FACTOR = 20
+WORLD_SCALE_FACTOR = 5
+
+MUTATION_RATE = 0.001  # вероятность мутации каждого веса
+MUTATION_SCALE = 0.1 # масштаб (стандартное отклонение) мутаций
 
 class FPS:
     def __init__(self):
@@ -31,60 +30,70 @@ class FPS:
 
 class Perceptron:
     def __init__(self, input_dim, hidden_dim, output_dim):
-        input_layer = Input(shape=(input_dim,))
-        hidden_layer_1 = Dense(hidden_dim, activation='relu')(input_layer)
-        # hidden_layer_2 = Dense(hidden_dim, activation='relu')(hidden_layer_1)
-        output_layer = Dense(output_dim, activation='softmax')(hidden_layer_1)
-        
-        self.model = Model(inputs=input_layer, outputs=output_layer)
-        self.model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.input_layer_weights = [[random.uniform(-1, 1) for _ in range(input_dim)] for _ in range(hidden_dim)]
+        self.hidden_layer_weights = [[random.uniform(-1, 1) for _ in range(hidden_dim)] for _ in range(output_dim)]
 
     def get_weights(self):
-        weights = []
-        for layer in self.model.layers:
-            weights.append(layer.get_weights())
-        return weights
+        return self.input_layer_weights, self.hidden_layer_weights
 
     def set_weights(self, weights):
-        for i, layer in enumerate(self.model.layers):
-            layer.set_weights(weights[i])
+        self.input_layer_weights, self.hidden_layer_weights = weights
 
     def print_weights(self):
-        weights = self.get_weights()
-        for i, layer_weights in enumerate(weights):
-            if len(layer_weights) > 0:  # Проверяем, есть ли веса
-                print(f"weights layer {i + 1}:")
-                print("weights:", layer_weights[0])
-                print("offsets:", layer_weights[1])
-                print()
+        print("Input layer weights: ", self.input_layer_weights)
+        print("Hidden layer weights: ", self.hidden_layer_weights)
+
+    def mutate_weights(self):
+        for i in range(len(self.input_layer_weights)):
+            for j in range(len(self.input_layer_weights[i])):
+                if random.random() < MUTATION_RATE:
+                    self.input_layer_weights[i][j] += random.gauss(0, MUTATION_SCALE)
+        
+        for i in range(len(self.hidden_layer_weights)):
+            for j in range(len(self.hidden_layer_weights[i])):
+                if random.random() < MUTATION_RATE:
+                    self.hidden_layer_weights[i][j] += random.gauss(0, MUTATION_SCALE)
+
+
+    def relu(self, x):
+        return max(0, x)
+
+    def softmax(self, x):
+        e_x = np.exp(x - np.max(x))
+        return e_x / e_x.sum(axis=0)
 
     def predict(self, x):
-        x = np.array(x).reshape(1, -1)  # Преобразование в двумерный массив
-        return self.model.predict(x)
+        hidden_layer_values = [sum(x*y for x, y in zip(x, weight)) for weight in self.input_layer_weights]
+        hidden_layer_outputs = [self.relu(value) for value in hidden_layer_values]
+        
+        output_layer_values = [sum(ho*hw for ho, hw in zip(hidden_layer_outputs, weight)) for weight in self.hidden_layer_weights]
+        output_layer_outputs = self.softmax(output_layer_values)
+        
+        return output_layer_outputs
+
 
 class Snake:
     DIRECTION_UP = 0
     DIRECTION_RIGHT = 1
     DIRECTION_DOWN = 2
     DIRECTION_LEFT = 3
-    VIEW_RADIUS = 10
-    MAX_ENERGY = 100
-    MAX_LENGTH = 3
-
-    MUTATION_RATE = 0.1  # вероятность мутации каждого веса
-    MUTATION_SCALE = 1.0  # масштаб (стандартное отклонение) мутаций
+    VIEW_RADIUS = 32
+    MAX_ENERGY = 200
+    MAX_LENGTH = 6
 
     def __init__(self, position, direction, body, energy=MAX_ENERGY):
         self.position = position
         self.direction = direction
         self.body = deque(body)  # Используйте deque вместо списка
-        # self.body = body  # Используйте deque вместо списка
         self.body_set = set(body)  # Создайте хеш-сет для тела змейки
         self.energy = energy
-        self.brain = Perceptron(6, 2, 3)  # Добавляем мозг в виде перцептрона
+        self.brain = Perceptron(6, 12, 3)  # Добавляем мозг в виде перцептрона
 
     def step(self):
-        # self.energy -= 1  # змейка тратит энергию на движение
+        self.energy -= 1  # змейка тратит энергию на движение
         
         if self.energy <= 0:
             self.energy = self.MAX_ENERGY
@@ -97,20 +106,20 @@ class Snake:
             input_data = closest_objects + closest_distances
 
             # Получение предсказания от перцептрона
-            # prediction = self.brain.predict(input_data)
-
+            prediction = self.brain.predict(input_data)
             # Выбор действия с наибольшей вероятностью
-            actions = random.choice(["FORWARD", "LEFT", "RIGHT"])
-            # action = actions[np.argmax(prediction)]
+            actions = ["FORWARD", "LEFT", "RIGHT"]
+            
+            action = actions[np.argmax(prediction)]
 
-            snake.move(actions)
+            snake.move(action)
         else:
             self.dead()
 
     def move(self, direction):
         if len(self.body) >= self.MAX_LENGTH:
             self.reproduce()
-        # self.brain.print_weights()
+        
         new_direction = self.change_direction(direction)
 
         if new_direction == self.DIRECTION_UP:
@@ -124,10 +133,10 @@ class Snake:
         else:
             return    
         
-        for snake in field.snakes:
-            if snake != self and next_position in snake.body_set:
-                self.dead()
-                return
+        # for snake in field.snakes:
+        #     if snake != self and next_position in snake.body_set:
+        #         self.dead()
+        #         return
         
         if next_position in self.body_set:
             # то удаляем из тела все элементы, начиная с этой позиции.
@@ -157,6 +166,8 @@ class Snake:
 
             if len(self.body) > 1:
                 self.body_set.remove(self.body.pop())
+
+        print(self.look_around(self.VIEW_RADIUS))
 
     def get_direction(self, pos1, pos2):
         # Вычисляем направление от pos1 к pos2
@@ -200,11 +211,11 @@ class Snake:
 
                 # Проверка столкновений со стенами, едой и другими змейками
                 if pos in field.wall_set:
-                    object_type = 3
-                elif pos in field.snake_set:
-                    object_type = 2
-                elif pos in field.food_set:
                     object_type = 1
+                elif pos in field.snake_set:
+                    object_type = 1
+                elif pos in field.food_set:
+                    object_type = 3
                 else:
                     continue
 
@@ -237,16 +248,10 @@ class Snake:
         self.body = deque(body_list[:half_length])
         self.body_set = set(self.body)
 
-        # Копирование весов
         child.brain.set_weights(self.brain.get_weights())
 
-        weights = child.brain.get_weights()
-        for i in range(len(weights)):
-            if len(weights[i]) > 0:  # Проверяем, есть ли веса
-                mutation_mask = np.random.uniform(0., 1., size=weights[i][0].shape) < self.MUTATION_RATE
-                mutation_values = np.random.standard_normal(size=weights[i][0].shape) * self.MUTATION_SCALE
-                weights[i][0] += mutation_mask * mutation_values
-        child.brain.set_weights(weights)
+        # Мутация весов
+        child.brain.mutate_weights()
 
         # Добавляем новую змейку на поле
         field.add_snake(child)
@@ -307,13 +312,13 @@ screen = pygame.display.set_mode((WORLD_WIDTH, WORLD_HEIGHT))
 field = Field((WORLD_WIDTH, WORLD_HEIGHT))
 fps_counter = FPS()
 
-for _ in range(50):
+for _ in range(200):
     field.add_food(field.random_food())
 
-for _ in range(50):
+for _ in range(500):
     field.add_wall(field.random_wall())
 
-for _ in range(100):
+for _ in range(1):
     field.add_snake(field.random_snake())
 
 while True:
@@ -340,8 +345,8 @@ while True:
 
     # fps_counter.count()
 
-    for snake in field.snakes:
-        snake.step()
+    # for snake in field.snakes:
+    #     snake.step()
 
     for snake in field.snakes:
         for segment in snake.body:
