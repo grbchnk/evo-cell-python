@@ -4,19 +4,20 @@ import random
 import numpy as np
 import time
 from collections import deque
-import matplotlib.pyplot as plt
-import pickle
 import datetime
 import os
+import pickle
 
-WORLD_WIDTH = 1080
-WORLD_HEIGHT = 750
-WORLD_SCALE_FACTOR = 5
+WORLD_WIDTH = 780
+WORLD_HEIGHT = 600
+WORLD_SCALE_FACTOR = 4
+LOAD_GENE_FILES = 10
+SAVE_LAST_SNAKE = 5
 
 max_generation = 0
 
 MUTATION_RATE = 0.001  # вероятность мутации каждого веса
-MUTATION_SCALE = 0.01 # масштаб (стандартное отклонение) мутаций
+MUTATION_SCALE = 0.1 # масштаб (стандартное отклонение) мутаций
 
 class FPS:
     def __init__(self):
@@ -32,25 +33,30 @@ class FPS:
             self.start_time = time.time()
 
 class Perceptron:
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        self.input_layer_weights = [[random.uniform(-1, 1) for _ in range(input_dim)] for _ in range(hidden_dim)]
-        self.hidden_layer_weights = [[random.uniform(-1, 1) for _ in range(hidden_dim)] for _ in range(output_dim)]
-
+    def __init__(self, layer_sizes):
+        self.layer_sizes = layer_sizes
+        self.layers = len(layer_sizes)
+        self.weights = [np.random.uniform(-1, 1, (layer_sizes[i], layer_sizes[i-1])) for i in range(1, self.layers)]
+        
     def get_weights(self):
-        return self.input_layer_weights, self.hidden_layer_weights
+        return self.weights
 
     def set_weights(self, weights):
-        self.input_layer_weights, self.hidden_layer_weights = weights
+        self.weights = weights
 
     def print_weights(self):
-        print("Input layer weights: ", self.input_layer_weights)
-        print("Hidden layer weights: ", self.hidden_layer_weights)
+        for i, w in enumerate(self.weights):
+            print(f"Layer {i+1} weights: ", w)
 
     def save_weights(self, filename):
-        with open(filename, 'wb') as f:
+        with open(filename + ".pkl", 'wb') as f:
+            pickle.dump(self.get_weights(), f)
+    
+    def save_weights_max(self, filename):
+        folder = "max_generation"
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        with open(folder + "/" + filename + ".pkl", 'wb') as f:
             pickle.dump(self.get_weights(), f)
 
     def load_weights(self, filename):
@@ -59,32 +65,21 @@ class Perceptron:
         self.set_weights(weights)
 
     def mutate_weights(self):
-        for i in range(len(self.input_layer_weights)):
-            for j in range(len(self.input_layer_weights[i])):
-                if random.random() < MUTATION_RATE:
-                    self.input_layer_weights[i][j] += random.gauss(0, MUTATION_SCALE)
-        
-        for i in range(len(self.hidden_layer_weights)):
-            for j in range(len(self.hidden_layer_weights[i])):
-                if random.random() < MUTATION_RATE:
-                    self.hidden_layer_weights[i][j] += random.gauss(0, MUTATION_SCALE)
+        for i in range(len(self.weights)):
+            self.weights[i] += (np.random.rand(*self.weights[i].shape) < MUTATION_RATE) * np.random.normal(0, MUTATION_SCALE, self.weights[i].shape)
 
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+    
+    def tanh(self, x):
+        return np.tanh(x)
 
-    def relu(self, x):
-        return max(0, x)
-
-    def softmax(self, x):
-        e_x = np.exp(x - np.max(x))
-        return e_x / e_x.sum(axis=0)
-
-    def predict(self, x):
-        hidden_layer_values = [sum(x*y for x, y in zip(x, weight)) for weight in self.input_layer_weights]
-        hidden_layer_outputs = [self.relu(value) for value in hidden_layer_values]
-        
-        output_layer_values = [sum(ho*hw for ho, hw in zip(hidden_layer_outputs, weight)) for weight in self.hidden_layer_weights]
-        output_layer_outputs = self.softmax(output_layer_values)
-
-        return output_layer_outputs
+    def predict(self, input_data):
+        activations = input_data
+        for weights in self.weights:
+            outputs = np.dot(activations, weights.T)
+            activations = self.tanh(outputs)
+        return activations
 
 
 class Snake:
@@ -94,7 +89,7 @@ class Snake:
     DIRECTION_LEFT = 3
     VIEW_RADIUS = 16
     MAX_ENERGY = 30
-    MAX_LENGTH = 4
+    MAX_LENGTH = 8
 
     def __init__(self, position, direction, body, color=None):
         self.position = position
@@ -102,7 +97,8 @@ class Snake:
         self.body = deque(body)
         self.body_set = set(body)
         self.energy = self.MAX_ENERGY
-        self.brain = Perceptron(8, 8, 3)
+        self.brain = Perceptron([10, 2, 2, 2, 3])
+        self.last_prediction = 0
         if color is None:
             self.color = (random.uniform(0, 255), random.uniform(0, 255), random.uniform(0, 255))
         else:
@@ -110,21 +106,21 @@ class Snake:
         self.generation = 0
 
     def step(self):
-        self.energy -= 1 
+        self.energy -= 1
         
         if self.energy <= 0:
             self.energy = self.MAX_ENERGY
             self.body_set.remove(self.body.pop())
 
         if len(self.body) > 0:
-            closest_objects, closest_distances = self.look_around(self.VIEW_RADIUS)
-            input_data = closest_objects + closest_distances
+            input_data = self.look_around(self.VIEW_RADIUS)
 
             prediction = self.brain.predict(input_data)
-
+            self.last_prediction = prediction
             actions = ["FORWARD", "LEFT", "RIGHT"]
+            
             action = actions[np.argmax(prediction)]
-
+            self.last_prediction = action
             snake.move(action)
         else:
             self.dead()
@@ -152,12 +148,18 @@ class Snake:
                 return
         
         if next_position in self.body_set:
+            self.dead()
+            # print("Dead in self" + str(self.look_around(self.VIEW_RADIUS)))
+            # print("Choice: " + self.last_prediction)
             # то удаляем из тела все элементы, начиная с этой позиции.
-            while self.body[-1] != next_position:
-                self.body_set.remove(self.body.pop())
-            self.body_set.remove(self.body.pop())
+            # while self.body[-1] != next_position:
+            #     self.body_set.remove(self.body.pop())
+            # self.body_set.remove(self.body.pop())
         elif next_position in field.wall_set:
             self.dead()
+            # print("Dead in wall" + str(self.look_around(self.VIEW_RADIUS)))
+            # print("Choice: " + self.last_prediction)
+
         elif next_position in field.food_set:
             self.eat()
             field.foods.remove(next_position)
@@ -169,7 +171,6 @@ class Snake:
             self.body.appendleft(self.position)
             self.body_set.add(self.position)
         else:
-            # Если следующая позиция свободна,
             self.position = next_position
             self.direction = new_direction
 
@@ -180,7 +181,6 @@ class Snake:
                 self.body_set.remove(self.body.pop())
 
     def get_direction(self, pos1, pos2):
-        # направление от pos1 к pos2
         dx, dy = pos2[0] - pos1[0], pos2[1] - pos1[1]
         if dx > 0:
             return self.DIRECTION_RIGHT
@@ -200,70 +200,54 @@ class Snake:
             new_direction = (self.direction + 1) % 4
 
         return new_direction
-        
+
     def look_around(self, view_radius):
+        def get_delta_pos(direction, distance):
+            if direction == self.DIRECTION_UP:
+                return 0, -distance
+            elif direction == self.DIRECTION_RIGHT:
+                return distance, 0
+            elif direction == self.DIRECTION_DOWN:
+                return 0, distance
+            elif direction == self.DIRECTION_LEFT:
+                return -distance, 0
+
+        def get_object_type(pos):
+            if pos in field.wall_set or pos in field.snake_set:
+                return -1
+            elif pos in field.food_set:
+                return 3
+            else:
+                return 0
+
         directions = [(self.direction - 1) % 4, self.direction, (self.direction + 1) % 4]
-        closest_objects = [0, 0, 0, 0, 0]
-        closest_distances = [view_radius + 1, view_radius + 1, view_radius + 1, view_radius + 1, view_radius + 1]
+        closest_objects = [0] * 5
+        closest_distances = [0] * 5
+        result = [0] * 10
 
         for distance in range(1, view_radius + 1):
             for i, direction in enumerate(directions):
-                if direction == self.DIRECTION_UP:
-                    pos = (self.position[0], (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                elif direction == self.DIRECTION_RIGHT:
-                    pos = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, self.position[1])
-                elif direction == self.DIRECTION_DOWN:
-                    pos = (self.position[0], (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                elif direction == self.DIRECTION_LEFT:
-                    pos = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, self.position[1])
-
-                if pos in field.wall_set:
-                    object_type = -1
-                elif pos in field.snake_set:
-                    object_type = -1
-                elif pos in field.food_set:
-                    object_type = 3
-                else:
-                    continue
-
-                if distance < closest_distances[i]:
+                dx, dy = get_delta_pos(direction, distance)
+                pos = ((self.position[0] + dx * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + dy * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                object_type = get_object_type(pos)
+                if object_type != 0 and closest_objects[i] == 0:
                     closest_objects[i] = object_type
                     closest_distances[i] = round(1 - distance / view_radius, 2)
 
-        for distance in range(1, view_radius + 1):
-            if self.direction == self.DIRECTION_UP:
-                pos_diag1 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                pos_diag2 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-            elif self.direction == self.DIRECTION_RIGHT:
-                pos_diag1 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                pos_diag2 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-            elif self.direction == self.DIRECTION_DOWN:
-                pos_diag1 = ((self.position[0] + distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                pos_diag2 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-            elif self.direction == self.DIRECTION_LEFT:
-                pos_diag1 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] - distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-                pos_diag2 = ((self.position[0] - distance * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + distance * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
-
-            positions = [pos_diag1, pos_diag2]
-            for i, pos in enumerate(positions):
-                if pos in field.wall_set:
-                    object_type = -1
-                elif pos in field.snake_set:
-                    object_type = -1
-                elif pos in field.food_set:
-                    object_type = 3
-                else:
-                    continue
-
-                if distance < closest_distances[i+3]:
-                    closest_objects[i+3] = object_type
-                    closest_distances[i+3] = round(1 - distance / view_radius, 2)
+            for j in range(2):
+                dx1, dy1 = get_delta_pos(directions[j], distance)
+                dx2, dy2 = get_delta_pos(directions[(j+1)%3], distance)
+                pos = ((self.position[0] + (dx1 + dx2) * WORLD_SCALE_FACTOR) % WORLD_WIDTH, (self.position[1] + (dy1 + dy2) * WORLD_SCALE_FACTOR) % WORLD_HEIGHT)
+                object_type = get_object_type(pos)
+                if object_type != 0 and closest_objects[i+j+1] == 0:
+                    closest_objects[i+j+1] = object_type
+                    closest_distances[i+j+1] = round(1 - distance / view_radius, 2)
 
         for k in range(5):
-            if closest_objects[k] == 0:
-                closest_distances[k] = 0
+            result[k*2] = closest_objects[k]
+            result[k*2+1] = closest_distances[k]
 
-        return closest_objects, closest_distances
+        return result
 
     def reproduce(self):
         half_length = len(self.body) // 2
@@ -287,14 +271,15 @@ class Snake:
         # мутация весов
         child.brain.mutate_weights()
 
-        self.MAX_LENGTH += 1
+        # self.MAX_LENGTH += 1
         child.MAX_LENGTH = self.MAX_LENGTH
 
-        child.generation = self.generation + 1
+        self.generation += 1
         global max_generation
-        if child.generation > max_generation:
-            max_generation = child.generation
-            self.brain.save_weights("gene_max-" + str(child.generation) + "_" + datetime.datetime.now().strftime("-%f") + ".pkl")
+        if self.generation > max_generation:
+            max_generation = self.generation
+            self.brain.save_weights("gene_max-" + str(self.generation) + datetime.datetime.now().strftime("-%f"))
+            self.brain.save_weights_max("gene_max-" + str(self.generation) + datetime.datetime.now().strftime("-%f"))
             print(max_generation)
 
         field.add_snake(child)
@@ -334,74 +319,141 @@ class Field:
     def random_food(self):
         while True:
             position = (random.randint(0, self.size[0]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR, random.randint(0, self.size[1]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR)
-            if position not in [segment for snake in self.snakes for segment in snake.body] and position not in self.walls:
+            if position not in [segment for snake in self.snakes for segment in snake.body] and position not in self.wall_set and position not in self.food_set:
                 return position
 
     def random_wall(self):
         while True:
             position = (random.randint(0, self.size[0]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR, random.randint(0, self.size[1]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR)
-            if position not in [segment for snake in self.snakes for segment in snake.body] and position not in self.foods:
+            if position not in [segment for snake in self.snakes for segment in snake.body] and position not in self.food_set:
                 return position
 
     def random_snake(self):
         while True:
             position = (random.randint(0, self.size[0]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR, random.randint(0, self.size[1]//WORLD_SCALE_FACTOR - 1)*WORLD_SCALE_FACTOR)
-            if position not in self.walls and position not in self.foods:
+            if position not in self.wall_set and position not in self.food_set:
                 return Snake(position, random.choice([Snake.DIRECTION_UP, Snake.DIRECTION_RIGHT, Snake.DIRECTION_DOWN, Snake.DIRECTION_LEFT]), [position])
+
+# def generate_maze(width, height):
+#     # Массив, который будет содержать данные лабиринта
+#     maze = [['WALL' for x in range(width)] for y in range(height)]
+
+#     # Стек для обхода в глубину
+#     stack = []
+
+#     # Выбираем случайную начальную точку
+#     start_x = random.randint(0, width//2)*2
+#     start_y = random.randint(0, height//2)*2
+
+#     # Добавляем начальную точку в стек
+#     stack.append((start_x, start_y))
+
+#     # Пока стек не пуст
+#     while stack:
+#         x, y = stack.pop()
+
+#         # Определяем направления прокладки пути
+#         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+#         random.shuffle(directions)
+
+#         # Пытаемся проложить путь в каждом направлении
+#         for dx, dy in directions:
+#             nx, ny = x + dx*2, y + dy*2
+
+#             # Если новая позиция находится в пределах лабиринта и является стеной
+#             if (0 <= nx < width) and (0 <= ny < height) and maze[ny][nx] == 'WALL':
+#                 # Прокладываем путь к новой позиции
+#                 maze[y+dy][x+dx] = 'SPACE'
+#                 maze[ny][nx] = 'SPACE'
+
+#                 # Добавляем новую позицию в стек
+#                 stack.append((nx, ny))
+
+#     return maze
+
+
 
 def initialize_game():
     global field
     field = Field((WORLD_WIDTH, WORLD_HEIGHT))
+    # maze = generate_maze(WORLD_WIDTH//(WORLD_SCALE_FACTOR*3), WORLD_HEIGHT//(WORLD_SCALE_FACTOR*3))
+    # for y in range(WORLD_HEIGHT//(WORLD_SCALE_FACTOR*3)):
+    #     for x in range(WORLD_WIDTH//(WORLD_SCALE_FACTOR*3)):
+    #         if maze[y][x] == 'WALL':
+    #             xg = random.random()
+    #             if xg < 0.3:
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3)-5, y*(WORLD_SCALE_FACTOR*3)))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3)+5, y*(WORLD_SCALE_FACTOR*3)))
+    #             elif xg > 0.3 and xg < 0.6:
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)-5))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)+5))
+    #             else:
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)-5))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3), y*(WORLD_SCALE_FACTOR*3)+5))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3)-5, y*(WORLD_SCALE_FACTOR*3)))
+    #                 field.add_wall((x*(WORLD_SCALE_FACTOR*3)+5, y*(WORLD_SCALE_FACTOR*3)))
 
-    for _ in range(500):
+    for _ in range(1000):
         field.add_food(field.random_food())
 
-    for _ in range(1200):
+    for _ in range(1500):
         field.add_wall(field.random_wall())
 
+    # for _ in range(1000):
+    #     field.add_snake(field.random_snake())
+
     for _ in range(2):
-                # field.add_snake(field.random_snake())
-
-
-        # files = os.listdir('.')
-
-        # # Фильтруем список, чтобы оставить только файлы .pkl
-        # files = [file for file in files if file.endswith('.pkl')]
-
-        # # Сортируем файлы по времени изменения (самый последний будет первым)
-        # files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-
-        # # Берем первый файл из списка
-        # last_file = files[0]
-
-        # gen_snake = field.random_snake()
-        # gen_snake.brain.load_weights(last_file)
-        # field.add_snake(gen_snake)
+        def load_latest_weights(folder):
+            # Получаем список всех файлов в папке
+            files = os.listdir(folder)
+            # Сортируем файлы по дате изменения (самые новые в конце)
+            files.sort(key=lambda x: os.path.getmtime(folder + "/" + x))
+            # Берем последний файл
+            q = 0
+            for file in files[:10]:
+                max_snake = field.random_snake()
+                
+            # Загружаем веса из этого файла
+                max_snake.brain.load_weights(folder + "/" + file)
+                max_snake.color = (105 + q * 6, 105 + q * 6, 105 + q * 6)
+                field.add_snake(max_snake)
+                q+=1
 
         files = os.listdir('.')
 
         # Фильтруем список, чтобы оставить только файлы .pkl
         files = [file for file in files if file.endswith('.pkl')]
 
+        if len(files) < LOAD_GENE_FILES:
+            for _ in range(1000):
+                field.add_snake(field.random_snake())
+            return
+
         # Сортируем файлы по времени изменения (самый последний будет первым)
         files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
 
-        for file in files[20:]:
+        for file in files[LOAD_GENE_FILES:]:
             os.remove(file)
 
-        for i in range(20):
+        for i in range(LOAD_GENE_FILES):
             last_file = files[i]
             gen_snake = field.random_snake()
             gen_snake.brain.load_weights(last_file)
             field.add_snake(gen_snake)
 
+        load_latest_weights("max_generation")
+
+
+
 pygame.init()
 screen = pygame.display.set_mode((WORLD_WIDTH, WORLD_HEIGHT))
 fps_counter = FPS()
 
+
 snake_counts_by_color = {}
-step_counter = 10
-plt.ion()
 
 initialize_game()
 
@@ -427,15 +479,17 @@ while True:
             elif event.key == pygame.K_r:
                 initialize_game()
 
-    if len(field.snakes) <= 10:
+    if len(field.snakes) <= SAVE_LAST_SNAKE:
         for snake in field.snakes:
-            snake.brain.save_weights("gene_" + datetime.datetime.now().strftime("-%f") + ".pkl")
+            snake.brain.save_weights("gene-" + datetime.datetime.now().strftime("%f"))
         initialize_game()
 
     screen.fill((0, 0, 0))
 
     for snake in field.snakes:
         snake.step()
+
+    # fps_counter.count()
 
     for snake in field.snakes:
         for segment in snake.body:
@@ -446,7 +500,7 @@ while True:
         pygame.draw.circle(screen, (255, 255, 255), (food[0]+WORLD_SCALE_FACTOR/2, food[1]+WORLD_SCALE_FACTOR/2), WORLD_SCALE_FACTOR/2)
 
     for wall in field.walls:
-        pygame.draw.rect(screen, (255, 0, 255), pygame.Rect(wall[0], wall[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
+        pygame.draw.rect(screen, (100, 100, 100), pygame.Rect(wall[0], wall[1], WORLD_SCALE_FACTOR, WORLD_SCALE_FACTOR))
 
 
 
